@@ -1,0 +1,173 @@
+cat >/root/cyberpanel_install_or_upgrade.sh <<'BASH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+echo "==========================================="
+echo "==> CyberPanel Auto Install / Upgrade"
+echo "==========================================="
+
+read -p "Input Hostname: " HOST_FQDN
+CP_ADMIN_PASS='Cyber@Panel@2026'
+SELF_PATH="/root/cyberpanel_install_or_upgrade.sh"
+
+cleanup() {
+  rm -f -- "${SELF_PATH}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Please run this as root."
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+echo "==========================================="
+echo "==> Configuring Hostname: ${HOST_FQDN}"
+echo "==========================================="
+SHORT_HOST="${HOST_FQDN%%.*}"
+if command -v hostnamectl >/dev/null 2>&1; then
+    hostnamectl set-hostname "${HOST_FQDN}"
+else
+    echo "${HOST_FQDN}" > /etc/hostname
+    hostname "${HOST_FQDN}"
+fi
+
+# Update /etc/hosts
+if grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
+    sed -i "s/^127\.0\.1\.1.*/127.0.1.1 ${HOST_FQDN} ${SHORT_HOST}/" /etc/hosts
+else
+    printf '127.0.1.1 %s %s\n' "${HOST_FQDN}" "${SHORT_HOST}" >> /etc/hosts
+fi
+
+echo "==> Current hostname"
+hostnamectl
+
+echo "==========================================="
+echo "==> Updating OS packages"
+echo "==========================================="
+apt-get update
+apt-get -y upgrade
+
+echo "==========================================="
+echo "==> Getting Public IP"
+echo "==========================================="
+get_public_ip() {
+  local ip=""
+  ip="$(curl -4fsSL --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+  [[ -n "$ip" ]] || ip="$(curl -4fsSL --max-time 10 https://ifconfig.me 2>/dev/null || true)"
+  [[ -n "$ip" ]] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo "$ip"
+}
+
+SERVER_IP="$(get_public_ip)"
+
+echo "Server IP            : ${SERVER_IP:-Unavailable}"
+echo "Server IP            : ${SERVER_IP:-Unavailable}"
+echo "Server IP            : ${SERVER_IP:-Unavailable}"
+
+echo "==========================================="
+echo "==> Installing prerequisites"
+echo "==========================================="
+apt-get install -y curl wget ca-certificates iputils-ping gnupg lsb-release
+
+echo "==========================================="
+echo "==> Checking whether CyberPanel is already installed"
+echo "==========================================="
+CYBERPANEL_INSTALLED=0
+
+if command -v cyberpanel >/dev/null 2>&1; then
+  CYBERPANEL_INSTALLED=1
+fi
+
+if command -v adminPass >/dev/null 2>&1; then
+  CYBERPANEL_INSTALLED=1
+fi
+
+if systemctl list-unit-files 2>/dev/null | grep -q '^lscpd\.service'; then
+  CYBERPANEL_INSTALLED=1
+fi
+
+for p in /usr/local/CyberCP /usr/local/cyberpanel /usr/local/CyberPanel /usr/local/lscp; do
+  if [[ -e "$p" ]]; then
+    CYBERPANEL_INSTALLED=1
+    break
+  fi
+done
+
+if [[ "${CYBERPANEL_INSTALLED}" -eq 1 ]]; then
+  echo "==========================================="
+  echo "==> CyberPanel detected: running upgrade"
+  echo "==========================================="
+  bash <(curl -fsSL https://raw.githubusercontent.com/usmannasir/cyberpanel/stable/preUpgrade.sh || wget -qO- https://raw.githubusercontent.com/usmannasir/cyberpanel/stable/preUpgrade.sh)
+else
+  echo "==========================================="
+  echo "==> CyberPanel not detected: starting normal CyberPanel installation"
+  echo "==========================================="
+  sh <(curl -fsSL https://cyberpanel.sh || wget -qO- https://cyberpanel.sh) \
+    --version ols \
+    --addons \
+    --password "$CP_ADMIN_PASS"
+fi
+
+echo "==========================================="
+echo "==> Setting CyberPanel admin password"
+echo "==========================================="
+if command -v adminPass >/dev/null 2>&1; then
+  adminPass "$CP_ADMIN_PASS" || true
+elif [[ -x /usr/bin/adminPass ]]; then
+  /usr/bin/adminPass "$CP_ADMIN_PASS" || true
+else
+  echo "WARNING: adminPass command not found. Password may already be set from install."
+fi
+
+echo "==========================================="
+echo "==> Restarting services if present"
+echo "==========================================="
+systemctl restart lsws 2>/dev/null || true
+systemctl restart lscpd 2>/dev/null || true
+echo "Restarted lsws and lscpd"
+echo "==========================================="
+echo "==> CyberPanel / Mail / DNS Port Health"
+echo "==========================================="
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]8090$' && echo 'Port 8090   :OK' || echo 'Port 8090 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]80$'   && echo 'Port 80     :OK' || echo 'Port 80 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]443$'  && echo 'Port 443    :OK' || echo 'Port 443 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]21$'   && echo 'Port 21     :OK' || echo 'Port 21 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]25$'   && echo 'Port 25     :OK' || echo 'Port 25 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]465$'  && echo 'Port 465    :OK' || echo 'Port 465 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]587$'  && echo 'Port 587    :OK' || echo 'Port 587 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]110$'  && echo 'Port 110    :OK' || echo 'Port 110 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]143$'  && echo 'Port 143    :OK' || echo 'Port 143 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]993$'  && echo 'Port 993    :OK' || echo 'Port 993 FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq '[:.]53$'   && echo 'Port 53 TCP :OK' || echo 'Port 53 TCP FAIL'
+ss -lun | awk '{print $5}' | grep -Eq '[:.]53$'   && echo 'Port 53 UDP :OK' || echo 'Port 53 UDP FAIL'
+ss -ltn | awk '{print $4}' | grep -Eq ':(4011[0-9]|401[2-9][0-9]|4020[0-9]|40210)$' && echo 'Port 40110-40210 OK' || echo '40110-40210 FAIL'
+
+echo "==========================================="
+echo "==> Check CyberPanel Working or Not?"
+echo "==========================================="
+systemctl status lscpd
+
+echo "==========================================="
+echo "==> Cleaning Completed"
+rm -f -- "${SELF_PATH}" 2>/dev/null || true
+
+echo "==========================================="
+echo "============ FINAL INFORMATION ============"
+echo "==========================================="
+hostnamectl || true
+echo "==========================================="
+echo "Server Hostname      : $HOST_FQDN"
+echo "Server IP            : ${SERVER_IP:-Unavailable}"
+echo "CyberPanel IP        : https://${SERVER_IP:-YOUR_SERVER_IP}:8090"
+echo "CyberPanel URL       : https://${HOST_FQDN}:8090"
+echo "CyberPanel Username  : admin"
+echo "CyberPanel Password  : $CP_ADMIN_PASS"
+echo "==========================================="
+
+read -p "Reboot VPS? [Y/n]: " choice; choice=${choice:-Y}; if [[ "$choice" =~ ^[Yy]$ ]]; then sudo reboot; else echo "Reboot cancelled."; fi
+BASH
+
+chmod +x /root/cyberpanel_install_or_upgrade.sh
+bash /root/cyberpanel_install_or_upgrade.sh
