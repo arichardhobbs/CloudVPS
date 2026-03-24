@@ -75,7 +75,8 @@ hostnamectl
 echo "==========================================="
 echo "==> Updating OS packages"
 echo "==========================================="
-sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+DEBIAN_FRONTEND=noninteractive sudo apt update && sudo apt upgrade -y
+DEBIAN_FRONTEND=noninteractive sudo apt-get update && sudo apt-get upgrade -y
 
 echo "==========================================="
 echo "==> Getting Public IP"
